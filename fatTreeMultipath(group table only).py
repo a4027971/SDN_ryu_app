@@ -36,7 +36,7 @@ class FatTreeMultipath(app_manager.RyuApp):
         self.i = 0
         self.datapath_registered = []
     
-    # 
+    # Event: new switch's send message to controller.
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
@@ -59,14 +59,20 @@ class FatTreeMultipath(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
-        # add group table 3 to layer 1
+        # add group table 3 to Core layer
+        # group table 3: let switch let input packet send out to all ports.
         if list(str(dpid))[0] == '1':
             self.send_group_mod(datapath)
             # print "send_group_mod to %d"%tem_id
             actions = [parser.OFPActionGroup(group_id=3)]
-            match = parser.OFPMatch()
+            match = parser.OFPMatch() # all packet will match
             self.add_flow(datapath, 1, match, actions)
 
+    # add a new flow(rule) to switch.
+    #   priority : the packet will match the highest priority to match, then follw the action to deal with packet.
+    #   match    : set the match condition, ex: 1 = msg.match['in_port']
+    #                                           packet from port 1 will be match.
+    #   actions  : the controller will take actions on packet when packet match.
     def add_flow(self, datapath, priority, match, actions):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -78,7 +84,8 @@ class FatTreeMultipath(app_manager.RyuApp):
                                 match=match, instructions=inst)
         #print mod.__dict__
         datapath.send_msg(mod)
-
+    
+    # send the packet back to the switch and we can set actions on it.
     def send_packet_out(self, msg, actions):
         datapath = msg.datapath
         ofproto = datapath.ofproto
@@ -91,7 +98,8 @@ class FatTreeMultipath(app_manager.RyuApp):
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                   in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
-
+    
+    # Event : switch send packet to controller will triger this event.
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         # get information
@@ -114,6 +122,8 @@ class FatTreeMultipath(app_manager.RyuApp):
             # ignore LLDP packet
             return
         
+        # DEBUG 
+        # monitor the packet sent to the controller.
         dst = eth.dst
         src = eth.src
         dpid = datapath.id
@@ -123,12 +133,13 @@ class FatTreeMultipath(app_manager.RyuApp):
         
         # learn a mac address to avoid FLOOD next time.
         # self.mac_to_port[dpid][src] = in_port
-
+        
+        # DEBUG : for debug , not userd in this app
         # topo learning
-        if src not in self.net:
-            self.net.add_node(src)
-            self.net.add_edge(dpid,src,{'port':in_port})
-            self.net.add_edge(src,dpid)
+        # if src not in self.net:
+        #     self.net.add_node(src)
+        #     self.net.add_edge(dpid,src,{'port':in_port})
+        #     self.net.add_edge(src,dpid)
         """
         if dst in self.net:
 
@@ -142,12 +153,11 @@ class FatTreeMultipath(app_manager.RyuApp):
         
         # actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
 
-        # install a flow to avoid packet_in next time
-        # if out_port != ofproto.OFPP_FLOOD:
-        #    self.add_flow(datapath, msg.in_port, dst, actions)
+        
         for tem_datapath in self.datapath_registered:
             tem_id = tem_datapath.id
-            # add group table to all layer2, 3 switches
+            # add group table1, 2 to all Aggregations & Edge layer switches.
+            
             if list(str(tem_id))[0] == '2' or list(str(tem_id))[0] == '3':
                 self.send_group_mod(tem_datapath)
                 # print "send_group_mod to %d"%tem_id
@@ -167,6 +177,8 @@ class FatTreeMultipath(app_manager.RyuApp):
         actions = []
         self.send_packet_out(msg, actions)
 
+    # Event : switch sending data to controller periodically will trigger this event. 
+    # this app just use this event to debug.
     @set_ev_cls(event.EventSwitchEnter)
     def get_topology_data(self, ev):
         switch_list = get_switch(self.topology_api_app, None)   
@@ -186,12 +198,17 @@ class FatTreeMultipath(app_manager.RyuApp):
         self.net.add_edges_from(links)
         print "**********List of links"
         print self.net.edges(data=True)
-
+    
+    # send group table to switches according to its layer
+    # group table 1 : send packet out by choosing one up_port(port1,2). 
+    # group table 2 : send packet out to all down_port(port3,4). 
+    # group table 3 : send packet out to all ports(including input_port).
     def send_group_mod(self, datapath):
         ofp = datapath.ofproto
         ofp_parser = datapath.ofproto_parser
         dpid = datapath.id
-
+        
+        # Aggregation, Edge layer
         if list(str(dpid))[0] == '2' or list(str(dpid))[0] == '3':
             port_1 = 1
             port_2 = 2
@@ -202,16 +219,19 @@ class FatTreeMultipath(app_manager.RyuApp):
             weight_2 = 50
             watch_port = ofproto_v1_3.OFPP_ANY
             watch_group = ofproto_v1_3.OFPQ_ALL
-
+            
+            # port 1,2 are up forward ports
             buckets = [
                 ofp_parser.OFPBucket(weight_1, watch_port, watch_group, actions_1),
                 ofp_parser.OFPBucket(weight_2, watch_port, watch_group, actions_2)]
-
+            
             group_id = 1
+            # ues OFPGT_SELECT, we will select one action from buckets. 
             req = ofp_parser.OFPGroupMod(datapath, ofp.OFPGC_ADD,
                                  ofp.OFPGT_SELECT, group_id, buckets)
             datapath.send_msg(req)
-
+            
+            # port 3,4 are down forward ports
             port_1 = 3
             port_2 = 4
             actions_1 = [ofp_parser.OFPActionOutput(port_1)]
@@ -224,7 +244,8 @@ class FatTreeMultipath(app_manager.RyuApp):
             req = ofp_parser.OFPGroupMod(datapath, ofp.OFPGC_ADD,
                                  ofp.OFPGT_ALL, group_id, buckets)
             datapath.send_msg(req)
-
+        
+        # Core layer
         elif list(str(dpid))[0] == '1':
             port_1 = 1
             port_2 = 2
@@ -252,6 +273,7 @@ class FatTreeMultipath(app_manager.RyuApp):
                 ofp_parser.OFPBucket(weight_5, watch_port, watch_group, actions_5)]
 
             group_id = 3
+            # use OFPGT_ALL means we will do all the actions in buckets.
             req = ofp_parser.OFPGroupMod(datapath, ofp.OFPGC_ADD,
                                  ofp.OFPGT_ALL, group_id, buckets)
             datapath.send_msg(req)
