@@ -35,7 +35,8 @@ class FatTreeMultipath(app_manager.RyuApp):
         self.no_of_links = 0
         self.i = 0
         self.datapath_registered = []
-
+    
+    # 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
