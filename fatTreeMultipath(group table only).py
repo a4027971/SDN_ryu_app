@@ -36,7 +36,7 @@ class FatTreeMultipath(app_manager.RyuApp):
         self.i = 0
         self.datapath_registered = []
     
-    # Event: new switch's send message to controller.
+    # Event: new switch sends message to controller.
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
@@ -156,7 +156,7 @@ class FatTreeMultipath(app_manager.RyuApp):
         
         for tem_datapath in self.datapath_registered:
             tem_id = tem_datapath.id
-            # add group table1, 2 to all Aggregations & Edge layer switches.
+            # add flow and group table1, 2 to all Aggregations & Edge layer switches.
             
             if list(str(tem_id))[0] == '2' or list(str(tem_id))[0] == '3':
                 self.send_group_mod(tem_datapath)
