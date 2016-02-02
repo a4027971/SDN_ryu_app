@@ -312,9 +312,11 @@ class FatTreeMultipath(app_manager.RyuApp):
             port_aggr2core = self.net[aggr_id][self.paths_upward[i][2]]['port']
             bottleneck = 0
             if edge_id in self.traffic and aggr_id in self.traffic:
+                # Choose maximum number of bytes from edge-to-aggr path and aggr-to-core path as edge-to-core path's bottleneck
                 bottleneck = max(self.traffic[edge_id][port_edge2aggr], self.traffic[aggr_id][port_aggr2core])
             if i not in self.path_bottleneck:
                 self.path_bottleneck.setdefault(i,{})
+            # Store bottleneck for each edge-to-core path
             self.path_bottleneck[i]['bottleneck'] = bottleneck
         # sort path by bottlenect
         self.sorted_path_bottleneck = [key[0] for key in sorted(self.path_bottleneck.iteritems(),
@@ -322,6 +324,8 @@ class FatTreeMultipath(app_manager.RyuApp):
         self.get_optimal_path()
 
     # prepare optimal_path for packet-in
+    # For each edge-layer switch, choose a path having minimum bottleneck to core-layer as optimal path, and
+    # don't care which core-layer switch is choosed to be the destination
     def get_optimal_path(self):
         optimal_path = {}
         i = 0
@@ -335,6 +339,7 @@ class FatTreeMultipath(app_manager.RyuApp):
                 break
         self.optimal_path = optimal_path
 
+    # Get all path from edge-layer to core-layer (as well as core to edge)
     def simple_path(self):
         for core_id in self.datapath_registered:
             core_datapath = self.datapath_registered[core_id]
@@ -342,42 +347,49 @@ class FatTreeMultipath(app_manager.RyuApp):
                 for edge_id in self.datapath_registered:
                     edge_datapath = self.datapath_registered[edge_id]
                     if list(str(edge_id))[0] == '3':
+                        # core-layer -> aggregation-layer -> edge-layer
                         for path in nx.all_simple_paths(self.net, source=core_id, target=edge_id, cutoff=2):
                             if path not in self.paths_downward:
                                 self.paths_downward.append(path)
+                        # edge-layer -> aggregation-layer -> core-layer
                         for path in nx.all_simple_paths(self.net, source=edge_id, target=core_id, cutoff=2):
                             if path not in self.paths_upward:
                                 self.paths_upward.append(path)
                                 index = len(self.paths_upward) - 1
+                                # For each path, initialize path_bottleneck
                                 self.path_bottleneck.setdefault(index,{})
             
     #########################
     #    Traffic monitor    #
     #########################
+    # Send traffic-monitor request to all switches periodically
     def _monitor(self):
         while True:
+            # Send monitor request to all switches
             for dpid in self.datapath_registered:
                 dp = self.datapath_registered[dpid]
                 self._request_stats(dp)
             hub.sleep(1)
+            # Use the latest traffic statistic to calculate the optimal path
             self.get_bottleneck()
             hub.sleep(1)
 
     def _request_stats(self, datapath):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-
+        # Send request to switch
         req = parser.OFPPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
         datapath.send_msg(req)
 
+    # Catch switch's response and execute following code 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def _port_stats_reply_handler(self, ev):
         body = ev.msg.body
         dpid = ev.msg.datapath.id
-        
+        # Initialize self.traffic
         if dpid not in self.traffic:
             self.traffic.setdefault(dpid,{})
-
+        # Store number of bytes pass through each port as well as each switch
         for stat in body:
             if stat.port_no != 0xFFFFFFFE:
                 self.traffic[dpid][stat.port_no] = stat.tx_bytes
