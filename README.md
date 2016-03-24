@@ -17,6 +17,9 @@
 **3. 測試**
 
     minimet> h001 ping h005
+    
+    
+[參考投影片](https://goo.gl/eHKtGc)
 
 Getting started
 ========
@@ -37,3 +40,5 @@ Run the application
 **3. Test**
 
     minimet> h001 ping h005
+
+[reference power point](https://goo.gl/eHKtGc)
